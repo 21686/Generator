@@ -1,0 +1,21 @@
+# ninja log v6
+0	5	1771506746154130470	json-populate-prefix/src/json-populate-stamp/json-populate-mkdir	5304b886372788e
+0	5	1771506746154130470	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-mkdir	5304b886372788e
+6	34634	1771506780781856864	json-populate-prefix/src/json-populate-stamp/json-populate-download	345d4dc2f20e8ef5
+6	34634	1771506780781856864	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-download	345d4dc2f20e8ef5
+34634	34645	1771506780782856856	json-populate-prefix/src/json-populate-stamp/json-populate-update	6657e96e8cdca823
+34634	34645	1771506780782856856	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-update	6657e96e8cdca823
+34645	34651	1771506780798856730	json-populate-prefix/src/json-populate-stamp/json-populate-patch	3d34dc752a8355fe
+34645	34651	1771506780798856730	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-patch	3d34dc752a8355fe
+34651	34656	1771506780803856690	json-populate-prefix/src/json-populate-stamp/json-populate-configure	153f8b475b19708e
+34651	34656	1771506780803856690	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-configure	153f8b475b19708e
+34656	34660	1771506780807856658	json-populate-prefix/src/json-populate-stamp/json-populate-build	fbbd9674d976c930
+34656	34660	1771506780807856658	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-build	fbbd9674d976c930
+34660	34666	1771506780813856611	json-populate-prefix/src/json-populate-stamp/json-populate-install	80066156c37807e4
+34660	34666	1771506780813856611	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-install	80066156c37807e4
+34666	34670	1771506780817856579	json-populate-prefix/src/json-populate-stamp/json-populate-test	6b7881d54c34c39e
+34666	34670	1771506780817856579	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-test	6b7881d54c34c39e
+34670	34675	1771506780823856532	CMakeFiles/json-populate-complete	bbc33b474c8a33ee
+34670	34675	1771506780823856532	json-populate-prefix/src/json-populate-stamp/json-populate-done	bbc33b474c8a33ee
+34670	34675	1771506780823856532	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/CMakeFiles/json-populate-complete	bbc33b474c8a33ee
+34670	34675	1771506780823856532	/home/kirill/Desktop/Generator/build/_deps/json-subbuild/json-populate-prefix/src/json-populate-stamp/json-populate-done	bbc33b474c8a33ee
