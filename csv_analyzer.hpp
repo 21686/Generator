@@ -3,10 +3,13 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "ports/errors/errors.hpp"
 
 namespace db_simulator {
 
@@ -27,8 +30,6 @@ class CsvAnalyzer {
 
   static void PrintReport(const AnalysisResult& result,
                           std::ostream& out = std::cout);
-
- private:
   struct CsvRow {
     int64_t timestampMs;
     int templateId;
@@ -39,6 +40,7 @@ class CsvAnalyzer {
     int64_t replicaLsn;
   };
 
+ private:
   static std::tuple<std::vector<CsvRow>, error> parseCsv(
       const std::string& csvFile);
   static bool detectAnomalies(const std::vector<CsvRow>& rows);
