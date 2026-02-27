@@ -14,7 +14,7 @@ namespace db_simulator {
 
 LogGenerator::LogGenerator(const LoggerConfig& cfg)
     : config(cfg),
-      logger("db_simulator"),
+      logger(kvalog::CreateLogger("db_simulator", "log_generator")),
       rng(std::random_device{}()),
       uniformDist(0.0, 1.0),
       currentTimeMs(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -51,9 +51,9 @@ error LogGenerator::Generate() {
 }
 
 error LogGenerator::Finalize() {
-  // Write CSV buffer
   {
     std::lock_guard<std::mutex> lock(fileMutex);
+
     for (const auto& row : csvBuffer) {
       csvFile << row.timestampMs << "," << row.templateId << "," << row.logLevel
               << "," << std::fixed << std::setprecision(3) << row.lagSec << ","
@@ -62,11 +62,12 @@ error LogGenerator::Finalize() {
     }
     csvBuffer.clear();
 
-    // Close JSON array
     jsonFile << "\n]\n";
     jsonFile.flush();
     csvFile.flush();
   }
+
+  logger.Flush();
   return nullptr;
 }
 
@@ -87,10 +88,7 @@ error LogGenerator::initializeFiles() {
                        config.outputCsvFile);
   }
 
-  // JSON array opening bracket
   jsonFile << "[\n";
-
-  // CSV header
   csvFile << "timestamp_ms,template_id,log_level,lag_sec,loss_percent,"
              "master_lsn,replica_lsn\n";
 
@@ -102,13 +100,12 @@ error LogGenerator::initializeFiles() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 error LogGenerator::generateSegment() {
-  // Distribute normal logs evenly between anomaly slots
-  int normalLogsPerAnomaly = static_cast<int>(
+  int normalLogsPerSlot = static_cast<int>(
       config.timeSegmentSeconds / (config.anomaliesPerSegment + 1) / 5.0);
-  if (normalLogsPerAnomaly < 2) normalLogsPerAnomaly = 2;
+  if (normalLogsPerSlot < 2) normalLogsPerSlot = 2;
 
   for (int a = 0; a < config.anomaliesPerSegment; ++a) {
-    if (auto err = generateNormalLogs(normalLogsPerAnomaly)) {
+    if (auto err = generateNormalLogs(normalLogsPerSlot)) {
       return err;
     }
     if (auto err = generateAnomaly()) {
@@ -116,11 +113,7 @@ error LogGenerator::generateSegment() {
     }
   }
 
-  // Trailing normal logs
-  if (auto err = generateNormalLogs(normalLogsPerAnomaly)) {
-    return err;
-  }
-  return nullptr;
+  return generateNormalLogs(normalLogsPerSlot);
 }
 
 error LogGenerator::generateNormalLogs(int count) {
@@ -128,11 +121,9 @@ error LogGenerator::generateNormalLogs(int count) {
     currentLagSec = randomDouble(normalLagMin, normalLagMax);
     masterLsn += lsnStepNormal;
     replicaLsn += lsnStepNormal;
-
     advanceTime(randomDouble(3.0, 8.0));
 
-    int choice = randomInt(0, 4);
-    switch (choice) {
+    switch (randomInt(0, 3)) {
       case 0:
         logReplicationStatus();
         break;
@@ -141,8 +132,7 @@ error LogGenerator::generateNormalLogs(int count) {
         break;
       case 2: {
         std::string table = "table_" + std::to_string(randomInt(1, 5));
-        int64_t rows = randomInt(1000, 50000);
-        logTableChecksumCalculated(table, rows);
+        logTableChecksumCalculated(table, randomInt(1000, 50000));
         break;
       }
       default:
@@ -154,7 +144,7 @@ error LogGenerator::generateNormalLogs(int count) {
 }
 
 error LogGenerator::generateAnomaly() {
-  // Phase 1: lag increased
+  // Phase 1: gradual lag growth
   double prevLag = currentLagSec;
   for (int i = 0; i < anomalySequenceLength; ++i) {
     currentLagSec += lagIncreaseStep * randomDouble(5.0, 15.0);
@@ -165,7 +155,6 @@ error LogGenerator::generateAnomaly() {
   }
 
   // Phase 2: packet loss + critical lag
-  double lossPercent = randomDouble(packetLossMin, packetLossMax);
   advanceTime(randomDouble(1.0, 2.0));
   logNetworkPacketLossDetected();
 
@@ -173,19 +162,17 @@ error LogGenerator::generateAnomaly() {
   advanceTime(randomDouble(1.0, 2.0));
   logReplicationLagCritical(prevLag);
 
-  // Occasionally escalate to divergence / stopped
+  // Phase 3: optional escalation
   if (randomDouble(0.0, 1.0) < 0.3) {
     advanceTime(randomDouble(0.5, 1.5));
-    std::string table = "table_" + std::to_string(randomInt(1, 5));
-    logDataDivergenceDetected(table);
+    logDataDivergenceDetected("table_" + std::to_string(randomInt(1, 5)));
   }
-
   if (randomDouble(0.0, 1.0) < 0.15) {
     advanceTime(randomDouble(0.5, 1.0));
     logReplicationStopped();
   }
 
-  // Recovery phase
+  // Phase 4: recovery
   advanceTime(randomDouble(2.0, 5.0));
   logNetworkConnectionRecovered();
 
@@ -198,7 +185,7 @@ error LogGenerator::generateAnomaly() {
   currentLagSec = randomDouble(normalLagMin, normalLagMax);
   logReplicationRecovered(recoveryTime);
 
-  anomaliesGenerated++;
+  ++anomaliesGenerated;
   return nullptr;
 }
 
@@ -207,14 +194,13 @@ error LogGenerator::generateAnomaly() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void LogGenerator::logReplicationStatus() {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationStatus);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationStatus),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "INFO"},
@@ -229,22 +215,23 @@ void LogGenerator::logReplicationStatus() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info(
-      "replication_status replica={} lag={:.2f}s master_lsn={} "
-      "replica_lsn={}",
-      config.replicaId, currentLagSec, formatLsn(masterLsn),
-      formatLsn(replicaLsn));
+
+  std::ostringstream msg;
+  msg << "replication_status replica=" << config.replicaId
+      << " lag=" << std::fixed << std::setprecision(2) << currentLagSec << "s"
+      << " master_lsn=" << formatLsn(masterLsn)
+      << " replica_lsn=" << formatLsn(replicaLsn);
+  logger.Info(msg.str());
 }
 
 void LogGenerator::logReplicationLagIncreased(double previousLag) {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationLagIncreased);
-  stats.logLevel = 1;  // WARN
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationLagIncreased),
+                   1,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "WARN"},
@@ -259,23 +246,24 @@ void LogGenerator::logReplicationLagIncreased(double previousLag) {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.warn(
-      "replication_lag_increased replica={} prev={:.2f}s "
-      "current={:.2f}s",
-      config.replicaId, previousLag, currentLagSec);
+
+  std::ostringstream msg;
+  msg << "replication_lag_increased replica=" << config.replicaId << std::fixed
+      << std::setprecision(2) << " prev=" << previousLag << "s"
+      << " current=" << currentLagSec << "s";
+  logger.Warning(msg.str());
 }
 
 void LogGenerator::logNetworkPacketLossDetected() {
   double lossPercent = randomDouble(packetLossMin, packetLossMax);
 
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::NetworkPacketLossDetected);
-  stats.logLevel = 2;  // ERROR
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = lossPercent;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::NetworkPacketLossDetected),
+                   2,
+                   currentLagSec,
+                   lossPercent,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {
       {"timestamp", getCurrentTimestamp()},
@@ -290,21 +278,22 @@ void LogGenerator::logNetworkPacketLossDetected() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.error(
-      "network_packet_loss_detected replica={} loss={:.1f}% "
-      "quality={}",
-      config.replicaId, lossPercent, getConnectionQuality(lossPercent));
+
+  std::ostringstream msg;
+  msg << "network_packet_loss_detected replica=" << config.replicaId
+      << std::fixed << std::setprecision(1) << " loss=" << lossPercent << "%"
+      << " quality=" << getConnectionQuality(lossPercent);
+  logger.Error(msg.str());
 }
 
-void LogGenerator::logReplicationLagCritical(double previousLag) {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationLagCritical);
-  stats.logLevel = 2;  // ERROR
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+void LogGenerator::logReplicationLagCritical(double /*previousLag*/) {
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationLagCritical),
+                   2,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "ERROR"},
@@ -319,22 +308,21 @@ void LogGenerator::logReplicationLagCritical(double previousLag) {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.error(
-      "replication_lag_critical replica={} lag={:.2f}s "
-      "threshold=100s",
-      config.replicaId, currentLagSec);
+
+  std::ostringstream msg;
+  msg << "replication_lag_critical replica=" << config.replicaId << std::fixed
+      << std::setprecision(2) << " lag=" << currentLagSec << "s threshold=100s";
+  logger.Error(msg.str());
 }
 
 void LogGenerator::logNetworkConnectionRecovered() {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId =
-      static_cast<int>(EventTemplate::NetworkConnectionRecovered);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::NetworkConnectionRecovered),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "INFO"},
@@ -346,21 +334,21 @@ void LogGenerator::logNetworkConnectionRecovered() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info("network_connection_recovered replica={} master={}",
-              config.replicaId, config.masterHost);
+
+  logger.Info("network_connection_recovered replica=" + config.replicaId +
+              " master=" + config.masterHost);
 }
 
 void LogGenerator::logReplicationCatchingUp() {
   replicaLsn += lsnStepCatchingUp;
 
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationCatchingUp);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationCatchingUp),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "INFO"},
@@ -373,21 +361,20 @@ void LogGenerator::logReplicationCatchingUp() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info(
-      "replication_catching_up replica={} master_lsn={} "
-      "replica_lsn={}",
-      config.replicaId, formatLsn(masterLsn), formatLsn(replicaLsn));
+
+  logger.Info("replication_catching_up replica=" + config.replicaId +
+              " master_lsn=" + formatLsn(masterLsn) +
+              " replica_lsn=" + formatLsn(replicaLsn));
 }
 
 void LogGenerator::logReplicationRecovered(double recoveryTimeSec) {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationRecovered);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationRecovered),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "INFO"},
@@ -402,21 +389,22 @@ void LogGenerator::logReplicationRecovered(double recoveryTimeSec) {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info(
-      "replication_recovered replica={} recovery_time={:.2f}s "
-      "lag={:.2f}s",
-      config.replicaId, recoveryTimeSec, currentLagSec);
+
+  std::ostringstream msg;
+  msg << "replication_recovered replica=" << config.replicaId << std::fixed
+      << std::setprecision(2) << " recovery_time=" << recoveryTimeSec << "s"
+      << " lag=" << currentLagSec << "s";
+  logger.Info(msg.str());
 }
 
 void LogGenerator::logDataIntegrityCheckStarted() {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::DataIntegrityCheckStarted);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::DataIntegrityCheckStarted),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "INFO"},
@@ -428,19 +416,19 @@ void LogGenerator::logDataIntegrityCheckStarted() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info("data_integrity_check_started replica={}", config.replicaId);
+
+  logger.Info("data_integrity_check_started replica=" + config.replicaId);
 }
 
 void LogGenerator::logTableChecksumCalculated(const std::string& table,
                                               int64_t rows) {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::TableChecksumCalculated);
-  stats.logLevel = 0;  // INFO
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::TableChecksumCalculated),
+                   0,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   int64_t checksum = static_cast<int64_t>(randomDouble(1e9, 9e9));
 
@@ -456,21 +444,20 @@ void LogGenerator::logTableChecksumCalculated(const std::string& table,
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.info(
-      "table_checksum_calculated replica={} table={} rows={} "
-      "checksum={}",
-      config.replicaId, table, rows, checksum);
+
+  logger.Info("table_checksum_calculated replica=" + config.replicaId +
+              " table=" + table + " rows=" + std::to_string(rows) +
+              " checksum=" + std::to_string(checksum));
 }
 
 void LogGenerator::logDataDivergenceDetected(const std::string& table) {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::DataDivergenceDetected);
-  stats.logLevel = 3;  // CRITICAL
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::DataDivergenceDetected),
+                   3,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   int64_t masterChecksum = static_cast<int64_t>(randomDouble(1e9, 9e9));
   int64_t replicaChecksum = masterChecksum + randomInt(1, 10000);
@@ -489,21 +476,21 @@ void LogGenerator::logDataDivergenceDetected(const std::string& table) {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.critical(
-      "data_divergence_detected replica={} table={} "
-      "master_checksum={} replica_checksum={}",
-      config.replicaId, table, masterChecksum, replicaChecksum);
+
+  logger.Critical("data_divergence_detected replica=" + config.replicaId +
+                  " table=" + table +
+                  " master_checksum=" + std::to_string(masterChecksum) +
+                  " replica_checksum=" + std::to_string(replicaChecksum));
 }
 
 void LogGenerator::logReplicationStopped() {
-  EventStats stats;
-  stats.timestampMs = getCurrentTimestampMs();
-  stats.templateId = static_cast<int>(EventTemplate::ReplicationStopped);
-  stats.logLevel = 3;  // CRITICAL
-  stats.lagSec = currentLagSec;
-  stats.lossPercent = 0.0;
-  stats.masterLsn = masterLsn;
-  stats.replicaLsn = replicaLsn;
+  EventStats stats{getCurrentTimestampMs(),
+                   static_cast<int>(EventTemplate::ReplicationStopped),
+                   3,
+                   currentLagSec,
+                   0.0,
+                   masterLsn,
+                   replicaLsn};
 
   nlohmann::json entry = {{"timestamp", getCurrentTimestamp()},
                           {"level", "CRITICAL"},
@@ -518,8 +505,11 @@ void LogGenerator::logReplicationStopped() {
 
   writeJsonLog(entry, stats.templateId);
   bufferCsvStats(stats);
-  logger.critical("replication_stopped replica={} lag={:.2f}s",
-                  config.replicaId, currentLagSec);
+
+  std::ostringstream msg;
+  msg << "replication_stopped replica=" << config.replicaId << std::fixed
+      << std::setprecision(2) << " lag=" << currentLagSec << "s";
+  logger.Critical(msg.str());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -548,7 +538,6 @@ std::string LogGenerator::getCurrentTimestamp() const {
 int64_t LogGenerator::getCurrentTimestampMs() const { return currentTimeMs; }
 
 std::string LogGenerator::formatLsn(int64_t lsn) const {
-  // Postgres-style LSN: XXXXXXXX/XXXXXXXX
   uint32_t hi = static_cast<uint32_t>(lsn >> 32);
   uint32_t lo = static_cast<uint32_t>(lsn & 0xFFFFFFFF);
   std::ostringstream oss;

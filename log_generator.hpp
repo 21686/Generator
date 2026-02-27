@@ -61,7 +61,7 @@ struct EventStats {
 class LogGenerator {
  private:
   LoggerConfig config;
-  kvalog::Logger logger;
+  kvalog::Logger logger;  // initialized via kvalog::CreateLogger in constructor
   std::ofstream jsonFile;
   std::ofstream csvFile;
   std::mt19937 rng;
